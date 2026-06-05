@@ -18,7 +18,7 @@ func TestSetAndGet(t *testing.T) {
 	}
 }
 
-func TestDelete(t *testing.T) {
+func TestDeleteExistingKey(t *testing.T) {
 	s := New()
 
 	s.Set("name", "avichal")
@@ -29,6 +29,16 @@ func TestDelete(t *testing.T) {
 
 	if ok {
 		t.Fatal("expected key to be deleted")
+	}
+}
+
+func TestDeletMissingKey(t *testing.T) {
+	s := New()
+
+	ok := s.Delete("key1")
+
+	if ok {
+		t.Fatal("expected key to not exist")
 	}
 }
 
