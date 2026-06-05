@@ -19,7 +19,7 @@ func main() {
 	fmt.Println("Type HELP to see available commands")
 
 	for {
-		fmt.Println("basalt>")
+		fmt.Print("basalt>")
 
 		if !scanner.Scan() {
 			fmt.Println("bye!!")
@@ -74,7 +74,11 @@ func main() {
 
 			key := parts[1]
 
-			s.Delete(key)
+			ok := s.Delete(key)
+			if !ok {
+				fmt.Println("key not found")
+				continue
+			}
 
 			fmt.Println("OK")
 
