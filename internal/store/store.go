@@ -1,26 +1,32 @@
 package store
 
-type Store struct {
+type Store interface {
+	Set(key, value string)
+	Get(key string) (string, bool)
+	Delete(key string) bool
+}
+
+type MemoryStore struct {
 	data map[string]string
 }
 
-func New() *Store {
-	return &Store{
+func New() Store {
+	return &MemoryStore{
 		data: make(map[string]string),
 	}
 }
 
-func (s *Store) Set(key, value string) {
-	s.data[key] = value
+func (m *MemoryStore) Set(key, value string) {
+	m.data[key] = value
 }
 
-func (s *Store) Get(key string) (string, bool) {
-	value, ok := s.data[key]
+func (m *MemoryStore) Get(key string) (string, bool) {
+	value, ok := m.data[key]
 	return value, ok
 }
 
-func (s *Store) Delete(key string) bool {
-	_, ok := s.data[key]
-	delete(s.data, key)
+func (m *MemoryStore) Delete(key string) bool {
+	_, ok := m.data[key]
+	delete(m.data, key)
 	return ok
 }

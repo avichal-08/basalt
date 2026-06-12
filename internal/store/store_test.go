@@ -4,7 +4,6 @@ import "testing"
 
 func TestSetAndGet(t *testing.T) {
 	s := New()
-
 	s.Set("name", "avichal")
 
 	value, ok := s.Get("name")
@@ -20,9 +19,7 @@ func TestSetAndGet(t *testing.T) {
 
 func TestDeleteExistingKey(t *testing.T) {
 	s := New()
-
 	s.Set("name", "avichal")
-
 	s.Delete("name")
 
 	_, ok := s.Get("name")
@@ -34,7 +31,6 @@ func TestDeleteExistingKey(t *testing.T) {
 
 func TestDeletMissingKey(t *testing.T) {
 	s := New()
-
 	ok := s.Delete("key1")
 
 	if ok {
@@ -54,7 +50,6 @@ func TestGetMissingKey(t *testing.T) {
 
 func TestUpdateExistingKey(t *testing.T) {
 	s := New()
-
 	s.Set("name", "avichal")
 	s.Set("name", "aditya")
 
