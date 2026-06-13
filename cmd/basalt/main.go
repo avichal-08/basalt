@@ -10,7 +10,11 @@ import (
 )
 
 func main() {
-	s := store.New()
+	s, err := store.NewDiskStore("database.aof")
+	if err != nil {
+		fmt.Println("Failed to initialize database:", err)
+		os.Exit(1)
+	}
 	scanner := bufio.NewScanner(os.Stdin)
 
 	fmt.Println("Basalt KV Store")

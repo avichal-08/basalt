@@ -1,6 +1,34 @@
 package store
 
-import "testing"
+import (
+	"fmt"
+	"os"
+	"testing"
+)
+
+func BenchmarkAOFStartup(b *testing.B) {
+	tempFile := "benchmark_test.aof"
+
+	f, err := os.Create(tempFile)
+	if err != nil {
+		b.Fatalf("failed to create temp file: %v", err)
+	}
+	for i := 0; i < 100000; i++ {
+		f.WriteString(fmt.Sprintf("SET key_%d value_%d\n", i, i))
+	}
+	f.Close()
+
+	defer os.Remove(tempFile)
+
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		_, err := NewDiskStore(tempFile)
+		if err != nil {
+			b.Fatalf("failed to boot disk store: %v", err)
+		}
+	}
+}
 
 func TestSetAndGet(t *testing.T) {
 	s := New()
