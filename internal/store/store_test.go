@@ -9,14 +9,18 @@ import (
 func BenchmarkAOFStartup(b *testing.B) {
 	tempFile := "benchmark_test.aof"
 
-	f, err := os.Create(tempFile)
+	aof, err := NewAOF(tempFile)
 	if err != nil {
-		b.Fatalf("failed to create temp file: %v", err)
+		b.Fatalf("failed to create temp aof: %v", err)
 	}
+
 	for i := 0; i < 100000; i++ {
-		f.WriteString(fmt.Sprintf("SET key_%d value_%d\n", i, i))
+		key := fmt.Sprintf("key_%d", i)
+		val := fmt.Sprintf("value_%d", i)
+		aof.Write(OpSet, key, val)
 	}
-	f.Close()
+
+	aof.Close()
 
 	defer os.Remove(tempFile)
 
