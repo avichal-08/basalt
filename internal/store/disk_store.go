@@ -1,10 +1,5 @@
 package store
 
-import (
-	"fmt"
-	"strings"
-)
-
 type DiskStore struct {
 	data map[string]string
 	aof  *AOF
@@ -21,22 +16,12 @@ func NewDiskStore(path string) (Store, error) {
 		aof:  aof,
 	}
 
-	err = store.aof.Read(func(line string) {
-		parts := strings.Fields(line)
-		if len(parts) == 0 {
-			return
-		}
-
-		command := parts[0]
-		switch command {
-		case "SET":
-			if len(parts) == 3 {
-				store.data[parts[1]] = parts[2]
-			}
-		case "DELETE":
-			if len(parts) == 2 {
-				delete(store.data, parts[1])
-			}
+	err = store.aof.Read(func(op byte, key, value string) {
+		switch op {
+		case OpSet:
+			store.data[key] = value
+		case OpDelete:
+			delete(store.data, key)
 		}
 	})
 
@@ -50,8 +35,7 @@ func NewDiskStore(path string) (Store, error) {
 func (d *DiskStore) Set(key, value string) {
 	d.data[key] = value
 
-	cmd := fmt.Sprintf("SET %s %s", key, value)
-	d.aof.Write(cmd)
+	d.aof.Write(OpSet, key, value)
 }
 
 func (d *DiskStore) Get(key string) (string, bool) {
@@ -67,8 +51,7 @@ func (d *DiskStore) Delete(key string) bool {
 
 	delete(d.data, key)
 
-	cmd := fmt.Sprintf("DELETE %s", key)
-	d.aof.Write(cmd)
+	d.aof.Write(OpDelete, key, "")
 
 	return true
 }
