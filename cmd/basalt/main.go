@@ -39,12 +39,12 @@ func main() {
 		switch command {
 
 		case "SET":
-			if len(parts) != 3 {
+			if len(parts) < 3 {
 				fmt.Println("usage:SET <key> <value>")
 				continue
 			}
 			key := parts[1]
-			value := parts[2]
+			value := strings.Join(parts[2:], " ")
 
 			s.Set(key, value)
 			fmt.Println("DONE!")
