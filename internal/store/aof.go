@@ -61,8 +61,9 @@ func (a *AOF) Write(op byte, key, value string) error {
 
 func (a *AOF) Read(fn func(op byte, key, value string)) error {
 	a.file.Seek(0, 0)
-
 	reader := bufio.NewReader(a.file)
+
+	buf := make([]byte, 4096)
 
 	for {
 		op, err := reader.ReadByte()
@@ -83,17 +84,25 @@ func (a *AOF) Read(fn func(op byte, key, value string)) error {
 			return err
 		}
 
-		keyBuf := make([]byte, keyLen)
-		if _, err := io.ReadFull(reader, keyBuf); err != nil {
+		if uint64(cap(buf)) < keyLen {
+			buf = make([]byte, keyLen)
+		}
+		keyBytes := buf[:keyLen]
+		if _, err := io.ReadFull(reader, keyBytes); err != nil {
 			return err
 		}
+		keyStr := string(keyBytes)
 
-		valBuf := make([]byte, valLen)
-		if _, err := io.ReadFull(reader, valBuf); err != nil {
+		if uint64(cap(buf)) < valLen {
+			buf = make([]byte, valLen)
+		}
+		valBytes := buf[:valLen]
+		if _, err := io.ReadFull(reader, valBytes); err != nil {
 			return err
 		}
+		valStr := string(valBytes)
 
-		fn(op, string(keyBuf), string(valBuf))
+		fn(op, keyStr, valStr)
 	}
 
 	return nil
