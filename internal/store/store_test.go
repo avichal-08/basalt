@@ -34,6 +34,30 @@ func BenchmarkAOFStartup(b *testing.B) {
 	}
 }
 
+func BenchmarkAOFWrite(b *testing.B) {
+	tempFile := "benchmark_write.aof"
+
+	s, err := NewDiskStore(tempFile)
+	if err != nil {
+		b.Fatalf("failed to initialize disk store: %v", err)
+	}
+
+	defer os.Remove(tempFile)
+
+	key := "test_key"
+	val := "this_is_a_standard_test_value_for_benchmarking_throughput"
+
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		s.Set(key, val)
+	}
+
+	if ds, ok := s.(*DiskStore); ok {
+		ds.aof.Close()
+	}
+}
+
 func TestSetAndGet(t *testing.T) {
 	s := New()
 	s.Set("name", "avichal")

@@ -9,7 +9,7 @@ import (
 )
 
 const (
-	OpSet    byte = 1
+	OpSet    byte = 1	
 	OpDelete byte = 2
 )
 
