@@ -1,15 +1,15 @@
 package store
 
 import (
-	"bufio"
 	"encoding/binary"
 	"io"
 	"os"
 	"time"
+	"unsafe"
 )
 
 const (
-	OpSet    byte = 1	
+	OpSet    byte = 1
 	OpDelete byte = 2
 )
 
@@ -60,47 +60,49 @@ func (a *AOF) Write(op byte, key, value string) error {
 }
 
 func (a *AOF) Read(fn func(op byte, key, value string)) error {
+	info, err := a.file.Stat()
+	if err != nil {
+		return err
+	}
+	fileSize := info.Size()
+
+	if fileSize == 0 {
+		return nil
+	}
+
+	data := make([]byte, fileSize)
+
 	a.file.Seek(0, 0)
-	reader := bufio.NewReader(a.file)
+	if _, err := io.ReadFull(a.file, data); err != nil {
+		return err
+	}
 
-	buf := make([]byte, 4096)
+	offset := 0
+	length := len(data)
 
-	for {
-		op, err := reader.ReadByte()
-		if err == io.EOF {
+	for offset < length {
+		op := data[offset]
+		offset++
+
+		keyLen, n := binary.Uvarint(data[offset:])
+		if n <= 0 {
 			break
 		}
-		if err != nil {
-			return err
-		}
+		offset += n
 
-		keyLen, err := binary.ReadUvarint(reader)
-		if err != nil {
-			return err
+		valLen, n := binary.Uvarint(data[offset:])
+		if n <= 0 {
+			break
 		}
+		offset += n
 
-		valLen, err := binary.ReadUvarint(reader)
-		if err != nil {
-			return err
-		}
+		keyBytes := data[offset : offset+int(keyLen)]
+		keyStr := unsafe.String(unsafe.SliceData(keyBytes), len(keyBytes))
+		offset += int(keyLen)
 
-		if uint64(cap(buf)) < keyLen {
-			buf = make([]byte, keyLen)
-		}
-		keyBytes := buf[:keyLen]
-		if _, err := io.ReadFull(reader, keyBytes); err != nil {
-			return err
-		}
-		keyStr := string(keyBytes)
-
-		if uint64(cap(buf)) < valLen {
-			buf = make([]byte, valLen)
-		}
-		valBytes := buf[:valLen]
-		if _, err := io.ReadFull(reader, valBytes); err != nil {
-			return err
-		}
-		valStr := string(valBytes)
+		valBytes := data[offset : offset+int(valLen)]
+		valStr := unsafe.String(unsafe.SliceData(valBytes), len(valBytes))
+		offset += int(valLen)
 
 		fn(op, keyStr, valStr)
 	}

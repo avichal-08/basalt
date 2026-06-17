@@ -12,7 +12,7 @@ func NewDiskStore(path string) (Store, error) {
 	}
 
 	store := &DiskStore{
-		data: make(map[string]string),
+		data: make(map[string]string, 100000),
 		aof:  aof,
 	}
 
