@@ -1,11 +1,15 @@
 package store
 
-import "sync"
+import (
+	"sync"
+	"time"
+)
 
 type DiskStore struct {
 	mu   sync.RWMutex
 	data map[string]string
 	aof  *AOF
+	path string
 }
 
 func NewDiskStore(path string) (*DiskStore, error) {
@@ -17,6 +21,7 @@ func NewDiskStore(path string) (*DiskStore, error) {
 	store := &DiskStore{
 		data: make(map[string]string, 100000),
 		aof:  aof,
+		path: path,
 	}
 
 	err = store.aof.Read(func(op byte, key, value string) {
@@ -27,10 +32,11 @@ func NewDiskStore(path string) (*DiskStore, error) {
 			delete(store.data, key)
 		}
 	})
-
 	if err != nil {
 		return nil, err
 	}
+
+	go store.startBackgroundCompactor(5 * time.Minute)
 
 	return store, nil
 }

@@ -14,6 +14,7 @@ const (
 
 type AOF struct {
 	file *os.File
+	done chan struct{}
 }
 
 func NewAOF(path string) (*AOF, error) {
@@ -30,8 +31,15 @@ func NewAOF(path string) (*AOF, error) {
 
 func (a *AOF) syncEverySecond() {
 	ticker := time.NewTicker(1 * time.Second)
-	for range ticker.C {
-		a.file.Sync()
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			a.file.Sync()
+		case <-a.done:
+			return
+		}
 	}
 }
 
@@ -104,6 +112,7 @@ func (a *AOF) Read(fn func(op byte, key, value string)) error {
 }
 
 func (a *AOF) Close() error {
+	close(a.done)
 	a.file.Sync()
 	return a.file.Close()
 }
