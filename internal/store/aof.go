@@ -2,7 +2,6 @@ package store
 
 import (
 	"encoding/binary"
-	"io"
 	"os"
 	"time"
 	"unsafe"
@@ -60,21 +59,15 @@ func (a *AOF) Write(op byte, key, value string) error {
 }
 
 func (a *AOF) Read(fn func(op byte, key, value string)) error {
-	info, err := a.file.Stat()
+	data, unmap, err := mmapFile(a.file)
 	if err != nil {
 		return err
 	}
-	fileSize := info.Size()
 
-	if fileSize == 0 {
+	defer unmap()
+
+	if len(data) == 0 {
 		return nil
-	}
-
-	data := make([]byte, fileSize)
-
-	a.file.Seek(0, 0)
-	if _, err := io.ReadFull(a.file, data); err != nil {
-		return err
 	}
 
 	offset := 0
