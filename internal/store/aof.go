@@ -2,6 +2,8 @@ package store
 
 import (
 	"encoding/binary"
+	"fmt"
+	"hash/crc32"
 	"os"
 	"time"
 	"unsafe"
@@ -53,14 +55,18 @@ func (a *AOF) Write(op byte, key, value string) error {
 	n1 := binary.PutUvarint(keyLenBuf, uint64(len(keyBytes)))
 	n2 := binary.PutUvarint(valLenBuf, uint64(len(valBytes)))
 
-	totalSize := 1 + n1 + n2 + len(keyBytes) + len(valBytes)
+	totalSize := 4 + 1 + n1 + n2 + len(keyBytes) + len(valBytes)
 	record := make([]byte, 0, totalSize)
 
+	record = append(record, []byte{0, 0, 0, 0}...)
 	record = append(record, op)
 	record = append(record, keyLenBuf[:n1]...)
 	record = append(record, valLenBuf[:n2]...)
 	record = append(record, keyBytes...)
 	record = append(record, valBytes...)
+
+	checksum := crc32.ChecksumIEEE(record[4:])
+	binary.LittleEndian.PutUint32(record[0:4], checksum)
 
 	_, err := a.file.Write(record)
 	return err
@@ -82,6 +88,14 @@ func (a *AOF) Read(fn func(op byte, key, value string)) error {
 	length := len(data)
 
 	for offset < length {
+		if offset+5 > length {
+			break
+		}
+
+		storedCRC := binary.LittleEndian.Uint32(data[offset : offset+4])
+		payloadStart := offset + 4
+		offset += 4
+
 		op := data[offset]
 		offset++
 
@@ -104,6 +118,12 @@ func (a *AOF) Read(fn func(op byte, key, value string)) error {
 		valBytes := data[offset : offset+int(valLen)]
 		valStr := unsafe.String(unsafe.SliceData(valBytes), len(valBytes))
 		offset += int(valLen)
+
+		actualCRC := crc32.ChecksumIEEE(data[payloadStart:offset])
+
+		if actualCRC != storedCRC {
+			return fmt.Errorf("data corruption detected on key: %s", keyStr)
+		}
 
 		fn(op, keyStr, valStr)
 	}
