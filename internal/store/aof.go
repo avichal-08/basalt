@@ -27,7 +27,7 @@ func NewAOF(path string) (*AOF, error) {
 
 	aof := &AOF{
 		file: f,
-		done: make(chan struct{})
+		done: make(chan struct{}),
 	}
 	go aof.syncEverySecond()
 
