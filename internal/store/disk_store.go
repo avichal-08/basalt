@@ -33,6 +33,7 @@ func NewDiskStore(path string) (*DiskStore, error) {
 		}
 	})
 	if err != nil {
+		store.aof.Close()
 		return nil, err
 	}
 
