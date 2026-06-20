@@ -6,7 +6,6 @@ import (
 	"hash/crc32"
 	"os"
 	"time"
-	"unsafe"
 )
 
 const (
@@ -115,11 +114,11 @@ func (a *AOF) Read(fn func(op byte, key, value string)) error {
 		offset += n
 
 		keyBytes := data[offset : offset+int(keyLen)]
-		keyStr := unsafe.String(unsafe.SliceData(keyBytes), len(keyBytes))
+		keyStr := string(keyBytes)
 		offset += int(keyLen)
 
 		valBytes := data[offset : offset+int(valLen)]
-		valStr := unsafe.String(unsafe.SliceData(valBytes), len(valBytes))
+		valStr := string(valBytes)
 		offset += int(valLen)
 
 		actualCRC := crc32.ChecksumIEEE(data[payloadStart:offset])
