@@ -71,7 +71,7 @@ func main() {
 			}
 
 			key := parts[1]
-			ok := s.Delete(key)
+			ok, _ := s.Delete(key)
 			if !ok {
 				fmt.Println("key not found")
 				continue
