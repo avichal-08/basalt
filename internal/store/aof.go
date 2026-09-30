@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"hash/crc32"
 	"os"
+	"sync"
 	"time"
 )
 
@@ -13,9 +14,18 @@ const (
 	OpDelete byte = 2
 )
 
+var recordPool = sync.Pool{
+	New: func() any {
+		b := make([]byte, 0, 4096)
+		return &b
+	},
+}
+
 type AOF struct {
 	file *os.File
 	done chan struct{}
+	wg   sync.WaitGroup
+	mu   sync.Mutex
 }
 
 func NewAOF(path string) (*AOF, error) {
@@ -28,12 +38,17 @@ func NewAOF(path string) (*AOF, error) {
 		file: f,
 		done: make(chan struct{}),
 	}
+
+	aof.wg.Add(1)
 	go aof.syncEverySecond()
 
 	return aof, nil
 }
 
 func (a *AOF) syncEverySecond() {
+
+	defer a.wg.Done()
+
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
@@ -48,86 +63,120 @@ func (a *AOF) syncEverySecond() {
 }
 
 func (a *AOF) Write(op byte, key, value string) error {
-	keyBytes := []byte(key)
-	valBytes := []byte(value)
+	kLen := len(key)
+	vLen := len(value)
 
-	keyLenBuf := make([]byte, binary.MaxVarintLen64)
-	valLenBuf := make([]byte, binary.MaxVarintLen64)
+	var vbuf [binary.MaxVarintLen64 * 2]byte
+	n1 := binary.PutUvarint(vbuf[:], uint64(kLen))
+	n2 := binary.PutUvarint(vbuf[n1:], uint64(vLen))
 
-	n1 := binary.PutUvarint(keyLenBuf, uint64(len(keyBytes)))
-	n2 := binary.PutUvarint(valLenBuf, uint64(len(valBytes)))
+	totalLen := 4 + 1 + n1 + n2 + kLen + vLen
 
-	totalSize := 4 + 1 + n1 + n2 + len(keyBytes) + len(valBytes)
-	record := make([]byte, 0, totalSize)
+	bufPtr := recordPool.Get().(*[]byte)
+	buf := *bufPtr
 
-	record = append(record, []byte{0, 0, 0, 0}...)
-	record = append(record, op)
-	record = append(record, keyLenBuf[:n1]...)
-	record = append(record, valLenBuf[:n2]...)
-	record = append(record, keyBytes...)
-	record = append(record, valBytes...)
+	if cap(buf) < totalLen {
+		buf = make([]byte, totalLen)
+	} else {
+		buf = buf[:totalLen]
+	}
 
-	checksum := crc32.ChecksumIEEE(record[4:])
-	binary.LittleEndian.PutUint32(record[0:4], checksum)
+	buf[4] = op
+	copy(buf[5:], vbuf[:n1+n2])
+	offset := 5 + n1 + n2
 
-	_, err := a.file.Write(record)
+	copy(buf[offset:], key)
+	offset += kLen
+	copy(buf[offset:], value)
+
+	checksum := crc32.ChecksumIEEE(buf[4:totalLen])
+	binary.LittleEndian.PutUint32(buf[0:4], checksum)
+
+	a.mu.Lock()
+	_, err := a.file.Write(buf[:totalLen])
+	a.mu.Unlock()
+
+	*bufPtr = buf[:0]
+	recordPool.Put(bufPtr)
+
 	return err
 }
 
 func (a *AOF) Read(fn func(op byte, key, value string)) error {
+	info, err := a.file.Stat()
+	if err != nil {
+		return err
+	}
+	fileSize := info.Size()
+	if fileSize == 0 {
+		return nil
+	}
+
 	data, unmap, err := mmapFile(a.file)
 	if err != nil {
 		return err
 	}
 
-	defer unmap()
-
-	if len(data) == 0 {
-		return nil
-	}
-
 	offset := 0
+	lastValidOffset := 0
 	length := len(data)
 
 	for offset < length {
-		if offset+5 > length {
+		if offset+7 > length {
 			break
 		}
 
 		storedCRC := binary.LittleEndian.Uint32(data[offset : offset+4])
 		payloadStart := offset + 4
-		offset += 4
+		curr := payloadStart
 
-		op := data[offset]
-		offset++
+		op := data[curr]
+		curr++
 
-		keyLen, n := binary.Uvarint(data[offset:])
-		if n <= 0 {
+		keyLen, n1 := binary.Uvarint(data[curr:])
+		if n1 <= 0 || curr+n1 > length {
 			break
 		}
-		offset += n
+		curr += n1
 
-		valLen, n := binary.Uvarint(data[offset:])
-		if n <= 0 {
+		valLen, n2 := binary.Uvarint(data[curr:])
+		if n2 <= 0 || curr+n2 > length {
 			break
 		}
-		offset += n
+		curr += n2
 
-		keyBytes := data[offset : offset+int(keyLen)]
-		keyStr := string(keyBytes)
-		offset += int(keyLen)
+		totalRecordLen := curr + int(keyLen) + int(valLen)
 
-		valBytes := data[offset : offset+int(valLen)]
-		valStr := string(valBytes)
-		offset += int(valLen)
+		if totalRecordLen > length || int(keyLen) < 0 || int(valLen) < 0 {
+			break
+		}
 
-		actualCRC := crc32.ChecksumIEEE(data[payloadStart:offset])
+		keyBytes := data[curr : curr+int(keyLen)]
+		curr += int(keyLen)
+		valBytes := data[curr : curr+int(valLen)]
+		curr += int(valLen)
 
+		actualCRC := crc32.ChecksumIEEE(data[payloadStart:totalRecordLen])
 		if actualCRC != storedCRC {
-			return fmt.Errorf("data corruption detected on key: %s", keyStr)
+			return fmt.Errorf("data corruption detected on key: %s", string(keyBytes))
+			_ = unmap()
 		}
 
-		fn(op, keyStr, valStr)
+		fn(op, string(keyBytes), string(valBytes))
+		offset = totalRecordLen
+		lastValidOffset = totalRecordLen
+	}
+
+	err = unmap()
+	if err != nil {
+		return err
+	}
+
+	if int64(lastValidOffset) < fileSize {
+		err = a.file.Truncate(int64(lastValidOffset))
+		if err != nil {
+			fmt.Printf("Warning: failed to truncate torn write: %v\n", err)
+		}
 	}
 
 	return nil
@@ -135,6 +184,7 @@ func (a *AOF) Read(fn func(op byte, key, value string)) error {
 
 func (a *AOF) Close() error {
 	close(a.done)
+	a.wg.Wait()
 	a.file.Sync()
 	return a.file.Close()
 }

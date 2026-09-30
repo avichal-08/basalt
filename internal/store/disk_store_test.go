@@ -3,8 +3,10 @@ package store
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestSetAndGet(t *testing.T) {
@@ -89,6 +91,8 @@ func TestDataCorruptionDetection(t *testing.T) {
 	if !strings.Contains(err.Error(), "data corruption detected") {
 		t.Fatalf("Expected CRC32 corruption error, got: %v", err)
 	}
+
+	time.Sleep(10 * time.Millisecond)
 }
 
 func BenchmarkDiskStore_Set(b *testing.B) {
@@ -120,12 +124,19 @@ func BenchmarkDiskStore_GetConcurrent(b *testing.B) {
 	db, _ := NewDiskStore(filepath.Join(dir, "bench_conc.aof"))
 	defer db.Close()
 
-	db.Set("bench_key", "bench_value")
+	//pre-generate keys to hit all 32 shards evenly
+	keys := make([]string, 1024)
+	for i := 0; i < 1024; i++ {
+		keys[i] = "key_" + strconv.Itoa(i)
+		db.Set(keys[i], "bench_value")
+	}
 
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
+		i := 0
 		for pb.Next() {
-			_, _ = db.Get("bench_key")
+			_, _ = db.Get(keys[i&1023]) // bitwise AND is faster than modulo for powers of 2
+			i++
 		}
 	})
 }

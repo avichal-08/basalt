@@ -1,6 +1,7 @@
 package store
 
 import (
+	"strconv"
 	"sync"
 	"testing"
 )
@@ -10,36 +11,26 @@ type mutexMap struct {
 	m  map[string]string
 }
 
-func BenchmarkMutexMap_Get(b *testing.B) {
-	db := &mutexMap{
-		m: map[string]string{
-			"bench_key": "bench_value",
-		},
-	}
-
-	b.ResetTimer()
-
-	for i := 0; i < b.N; i++ {
-		db.mu.RLock()
-		_, _ = db.m["bench_key"]
-		db.mu.RUnlock()
-	}
-}
-
 func BenchmarkMutexMap_GetConcurrent(b *testing.B) {
 	db := &mutexMap{
-		m: map[string]string{
-			"bench_key": "bench_value",
-		},
+		m: make(map[string]string),
+	}
+
+	keys := make([]string, 1024)
+	for i := 0; i < 1024; i++ {
+		keys[i] = "key_" + strconv.Itoa(i)
+		db.m[keys[i]] = "bench_value"
 	}
 
 	b.ResetTimer()
 
 	b.RunParallel(func(pb *testing.PB) {
+		i := 0
 		for pb.Next() {
 			db.mu.RLock()
-			_, _ = db.m["bench_key"]
+			_, _ = db.m[keys[i&1023]]
 			db.mu.RUnlock()
+			i++
 		}
 	})
 }

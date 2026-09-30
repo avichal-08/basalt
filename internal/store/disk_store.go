@@ -2,14 +2,46 @@ package store
 
 import (
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
-type DiskStore struct {
+const numShards = 32
+
+type shard struct {
 	mu   sync.RWMutex
 	data map[string]string
-	aof  *AOF
-	path string
+}
+
+type CompactionDiff struct {
+	op    byte
+	key   string
+	value string
+}
+
+type DiskStore struct {
+	shards [numShards]*shard
+	aof    *AOF
+	path   string
+
+	isCompacting     atomic.Bool
+	compactionMu     sync.Mutex
+	compactionBuffer []CompactionDiff
+	stopCompactor    chan struct{}
+}
+
+func fnv32(key string) uint32 {
+	hash := uint32(2166136261)
+	const prime32 = uint32(16777619)
+	for i := 0; i < len(key); i++ {
+		hash ^= uint32(key[i])
+		hash *= prime32
+	}
+	return hash
+}
+
+func (d *DiskStore) getShard(key string) *shard {
+	return d.shards[fnv32(key)%numShards]
 }
 
 func NewDiskStore(path string) (*DiskStore, error) {
@@ -19,17 +51,24 @@ func NewDiskStore(path string) (*DiskStore, error) {
 	}
 
 	store := &DiskStore{
-		data: make(map[string]string, 100000),
-		aof:  aof,
-		path: path,
+		aof:           aof,
+		path:          path,
+		stopCompactor: make(chan struct{}),
+	}
+
+	for i := 0; i < numShards; i++ {
+		store.shards[i] = &shard{
+			data: make(map[string]string),
+		}
 	}
 
 	err = store.aof.Read(func(op byte, key, value string) {
+		s := store.getShard(key)
 		switch op {
 		case OpSet:
-			store.data[key] = value
+			s.data[key] = value
 		case OpDelete:
-			delete(store.data, key)
+			delete(s.data, key)
 		}
 	})
 	if err != nil {
@@ -38,51 +77,65 @@ func NewDiskStore(path string) (*DiskStore, error) {
 	}
 
 	go store.startBackgroundCompactor(5 * time.Minute)
-
 	return store, nil
 }
 
-func (d *DiskStore) Set(key, value string) error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
+func (d *DiskStore) trackCompaction(op byte, key, value string) {
+	if !d.isCompacting.Load() {
+		return
+	}
 
-	err := d.aof.Write(OpSet, key, value)
-	if err != nil {
+	d.compactionMu.Lock()
+	defer d.compactionMu.Unlock()
+
+	if d.isCompacting.Load() {
+		d.compactionBuffer = append(d.compactionBuffer, CompactionDiff{op: op, key: key, value: value})
+	}
+}
+
+func (d *DiskStore) Set(key, value string) error {
+	if err := d.aof.Write(OpSet, key, value); err != nil {
 		return err
 	}
 
-	d.data[key] = value
+	s := d.getShard(key)
+	s.mu.Lock()
+	s.data[key] = value
+	s.mu.Unlock()
+
+	d.trackCompaction(OpSet, key, value)
 	return nil
 }
 
 func (d *DiskStore) Get(key string) (string, bool) {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
-
-	value, ok := d.data[key]
+	s := d.getShard(key)
+	s.mu.RLock()
+	value, ok := s.data[key]
+	s.mu.RUnlock()
 	return value, ok
 }
 
 func (d *DiskStore) Delete(key string) (bool, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
+	s := d.getShard(key)
 
-	_, ok := d.data[key]
+	s.mu.Lock()
+	_, ok := s.data[key]
 	if !ok {
+		s.mu.Unlock()
 		return false, nil
 	}
+	delete(s.data, key)
+	s.mu.Unlock()
 
-	err := d.aof.Write(OpDelete, key, "")
-	if err != nil {
+	if err := d.aof.Write(OpDelete, key, ""); err != nil {
 		return false, err
 	}
 
-	delete(d.data, key)
+	d.trackCompaction(OpDelete, key, "")
 	return true, nil
 }
 
 func (d *DiskStore) Close() error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
+	close(d.stopCompactor)
 	return d.aof.Close()
 }
