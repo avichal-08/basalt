@@ -140,3 +140,31 @@ func BenchmarkDiskStore_GetConcurrent(b *testing.B) {
 		}
 	})
 }
+
+func BenchmarkDiskStore_MixedWorkload(b *testing.B) {
+	dir := b.TempDir()
+	db, _ := NewDiskStore(filepath.Join(dir, "bench_mixed.aof"))
+	defer db.Close()
+
+	keys := make([]string, 1024)
+	for i := 0; i < 1024; i++ {
+		keys[i] = "key_" + strconv.Itoa(i)
+		db.Set(keys[i], "baseline_value")
+	}
+
+	b.ResetTimer()
+
+	b.RunParallel(func(pb *testing.PB) {
+		i := 0
+		for pb.Next() {
+			key := keys[i&1023]
+
+			if i%10 < 9 {
+				_, _ = db.Get(key)
+			} else {
+				_ = db.Set(key, "mutated_value")
+			}
+			i++
+		}
+	})
+}
