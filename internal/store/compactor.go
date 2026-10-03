@@ -20,75 +20,81 @@ func (d *DiskStore) startBackgroundCompactor(interval time.Duration) {
 }
 
 func (d *DiskStore) Compact() error {
+	if !d.compactRunMu.TryLock() {
+		return nil // another compaction is already running
+	}
+	defer d.compactRunMu.Unlock()
+
 	tmpPath := d.path + ".tmp"
+	_ = os.Remove(tmpPath) // never inherit leftovers from a crashed run
+
 	tmpAOF, err := NewAOF(tmpPath)
 	if err != nil {
 		return err
 	}
 
+	//turn on the sidecar buffer to catch incoming writes
 	d.compactionMu.Lock()
-	d.compactionBuffer = make([]CompactionDiff, 0, 1024)
 	d.isCompacting.Store(true)
 	d.compactionMu.Unlock()
 
+	//phase 1: snapshot (writers keep running freely)
 	for i := 0; i < numShards; i++ {
 		s := d.shards[i]
 
 		s.mu.RLock()
-		keys := make([]string, 0, len(s.data))
-		for k := range s.data {
-			keys = append(keys, k)
-		}
-		s.mu.RUnlock()
-
-		for _, k := range keys {
-			s.mu.RLock()
-			val, exists := s.data[k]
-			s.mu.RUnlock()
-
-			if exists {
-				if err := tmpAOF.Write(OpSet, k, val); err != nil {
-					d.abortCompaction(tmpPath, tmpAOF)
-					return err
-				}
+		for k, v := range s.data {
+			if err := tmpAOF.Write(OpSet, k, v); err != nil {
+				s.mu.RUnlock()
+				d.abortCompaction(tmpPath, tmpAOF)
+				return err
 			}
 		}
+		s.mu.RUnlock()
 	}
 
+	//phase 2: drain the buffer and swap (writers paused)
+	d.swapMu.Lock()
+	defer d.swapMu.Unlock()
+
 	d.compactionMu.Lock()
-	defer d.compactionMu.Unlock()
-
 	d.isCompacting.Store(false)
+	buf := d.compactionBuffer
+	d.compactionBuffer = nil
+	d.compactionMu.Unlock()
 
-	for _, diff := range d.compactionBuffer {
+	for _, diff := range buf {
 		if err := tmpAOF.Write(diff.op, diff.key, diff.value); err != nil {
 			tmpAOF.Close()
 			os.Remove(tmpPath)
-			d.compactionBuffer = nil
 			return err
 		}
 	}
-
-	d.compactionBuffer = nil
 
 	if err := tmpAOF.Close(); err != nil {
 		os.Remove(tmpPath)
 		return err
 	}
+
 	if err := d.aof.Close(); err != nil {
-		return err
-	}
-	if err := os.Rename(tmpPath, d.path); err != nil {
+		os.Remove(tmpPath)
 		return err
 	}
 
+	renameErr := os.Rename(tmpPath, d.path)
+	if renameErr != nil {
+		os.Remove(tmpPath)
+	}
+
+	//whether or not the rename worked, d.path holds a valid log
+	//reopen it so the store never keeps pointing at a closed file
 	newAof, err := NewAOF(d.path)
 	if err != nil {
 		return err
 	}
-
 	d.aof = newAof
-	return nil
+
+	return renameErr
 }
 
 func (d *DiskStore) abortCompaction(tmpPath string, tmpAOF *AOF) {
