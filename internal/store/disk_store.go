@@ -1,6 +1,7 @@
 package store
 
 import (
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -45,6 +46,11 @@ func (d *DiskStore) getShard(key string) *shard {
 }
 
 func NewDiskStore(path string) (*DiskStore, error) {
+
+	//a leftover temp file from the previous crashed compaction before the rename
+	//the main log is still authoritative, so discard it safely
+	_ = os.Remove(path + ".tmp")
+
 	aof, err := NewAOF(path)
 	if err != nil {
 		return nil, err
