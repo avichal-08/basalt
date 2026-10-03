@@ -34,6 +34,8 @@ type DiskStore struct {
 	compactionMu     sync.Mutex
 	compactionBuffer []CompactionDiff
 	stopCompactor    chan struct{}
+	closeOnce        sync.Once
+	closeErr         error
 }
 
 func fnv32(key string) uint32 {
@@ -152,7 +154,13 @@ func (d *DiskStore) Delete(key string) (bool, error) {
 	return true, nil
 }
 
+// close is safe to call more than once
 func (d *DiskStore) Close() error {
-	close(d.stopCompactor)
-	return d.aof.Close()
+	d.closeOnce.Do(func() {
+		close(d.stopCompactor)
+		d.swapMu.Lock()
+		defer d.swapMu.Unlock()
+		d.closeErr = d.aof.Close()
+	})
+	return d.closeErr
 }
