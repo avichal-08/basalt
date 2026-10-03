@@ -145,11 +145,11 @@ func (a *AOF) Read(fn func(op byte, key, value string)) error {
 		}
 		curr += n2
 
-		totalRecordLen := curr + int(keyLen) + int(valLen)
-
-		if totalRecordLen > length || int(keyLen) < 0 || int(valLen) < 0 {
+		remaining := uint64(length - curr)
+		if keyLen > remaining || valLen > remaining-keyLen {
 			break
 		}
+		totalRecordLen := curr + int(keyLen) + int(valLen)
 
 		keyBytes := data[curr : curr+int(keyLen)]
 		curr += int(keyLen)
@@ -158,8 +158,9 @@ func (a *AOF) Read(fn func(op byte, key, value string)) error {
 
 		actualCRC := crc32.ChecksumIEEE(data[payloadStart:totalRecordLen])
 		if actualCRC != storedCRC {
-			return fmt.Errorf("data corruption detected on key: %s", string(keyBytes))
+			err := fmt.Errorf("data corruption detected on key: %s", string(keyBytes))
 			_ = unmap()
+			return err
 		}
 
 		fn(op, string(keyBytes), string(valBytes))
