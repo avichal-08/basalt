@@ -25,6 +25,11 @@ type DiskStore struct {
 	aof    *AOF
 	path   string
 
+	//swapMu orders writers against the compactor's final log swap
+	//set/delete hold it for reading; compact holds it for writing
+	swapMu sync.RWMutex
+
+	compactRunMu     sync.Mutex //ensures only one compact runs at a time
 	isCompacting     atomic.Bool
 	compactionMu     sync.Mutex
 	compactionBuffer []CompactionDiff
@@ -100,14 +105,18 @@ func (d *DiskStore) trackCompaction(op byte, key, value string) {
 }
 
 func (d *DiskStore) Set(key, value string) error {
-	if err := d.aof.Write(OpSet, key, value); err != nil {
-		return err
-	}
+	d.swapMu.RLock()
+	defer d.swapMu.RUnlock()
 
 	s := d.getShard(key)
 	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	//log first, then memory, all strictly inside the shard lock
+	if err := d.aof.Write(OpSet, key, value); err != nil {
+		return err
+	}
 	s.data[key] = value
-	s.mu.Unlock()
 
 	d.trackCompaction(OpSet, key, value)
 	return nil
@@ -122,20 +131,22 @@ func (d *DiskStore) Get(key string) (string, bool) {
 }
 
 func (d *DiskStore) Delete(key string) (bool, error) {
-	s := d.getShard(key)
+	d.swapMu.RLock()
+	defer d.swapMu.RUnlock()
 
+	s := d.getShard(key)
 	s.mu.Lock()
-	_, ok := s.data[key]
-	if !ok {
-		s.mu.Unlock()
+	defer s.mu.Unlock()
+
+	if _, ok := s.data[key]; !ok {
 		return false, nil
 	}
-	delete(s.data, key)
-	s.mu.Unlock()
 
+	//log first: if the disk write fails, memory is left untouched
 	if err := d.aof.Write(OpDelete, key, ""); err != nil {
 		return false, err
 	}
+	delete(s.data, key)
 
 	d.trackCompaction(OpDelete, key, "")
 	return true, nil
